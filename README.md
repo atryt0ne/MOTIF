@@ -167,3 +167,15 @@ Note that we cannot carry full expeirments on transductive datasets for MOTIF si
 | `FBNELL`| single version |
 
 </details>
+
+## 📖 Citation
+
+If you find this work useful, please consider citing our ICML 2025 paper:
+
+```bibtex
+@inproceedings{huang2025how,
+  title        = {How Expressive are Knowledge Graph Foundation Models?},
+  author       = {Xingyue Huang and Pablo Barcel{\'o} and Michael M. Bronstein and {\.{I}}smail {\.{I}}lkan Ceylan and Mikhail Galkin and Juan L. Reutter and Miguel Romero Orth},
+  booktitle    = {Proceedings of the Forty-second International Conference on Machine Learning},
+  year         = {2025}
+}
