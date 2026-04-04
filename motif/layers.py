@@ -298,7 +298,7 @@ class GeneralizedRelationalConv(MessagePassing):
             # This is slower but works on any platform without compilation
             node_in, node_out = edge_index
             batch_size, num_node = input.shape[:2]
-            
+
             # Compute messages
             if self.message_func == "distmult":
                 # relation: (batch_size, num_relations, dim)
@@ -317,88 +317,29 @@ class GeneralizedRelationalConv(MessagePassing):
                 message = edge_relation * edge_input
             else:
                 raise ValueError("Unknown message function `%s`" % self.message_func)
-            
+
             # Apply edge weights
             if edge_weight is not None:
                 message = message * edge_weight.unsqueeze(-1)
-            
+
             # Aggregate messages
             # message: (batch_size, num_edges, dim)
             # node_out: (num_edges,)
             if self.aggregate_func == "sum":
-                update = scatter(message, node_out, dim=1, dim_size=num_node, reduce="sum")
+                update = scatter(
+                    message, node_out, dim=1, dim_size=num_node, reduce="sum"
+                )
                 update = update + boundary
             elif self.aggregate_func == "mean":
-                update = scatter(message, node_out, dim=1, dim_size=num_node, reduce="sum")
+                update = scatter(
+                    message, node_out, dim=1, dim_size=num_node, reduce="sum"
+                )
                 update = (update + boundary) / degree_out
             elif self.aggregate_func == "max":
-                update = scatter(message, node_out, dim=1, dim_size=num_node, reduce="max")
+                update = scatter(
+                    message, node_out, dim=1, dim_size=num_node, reduce="max"
+                )
                 update = update + boundary
-            else:
-                raise ValueError("Unknown aggregation function `%s`" % self.aggregate_func)
-                update = torch.max(update, boundary)
-            elif self.aggregate_func == "pna":
-                # we use PNA with 4 aggregators (mean / max / min / std)
-                # and 3 scalars (identity / log degree / reciprocal of log degree)
-                sum = generalized_rspmm(
-                    edge_index,
-                    edge_type,
-                    edge_weight,
-                    relation,
-                    input,
-                    sum="add",
-                    mul=mul,
-                )
-                sq_sum = generalized_rspmm(
-                    edge_index,
-                    edge_type,
-                    edge_weight,
-                    relation**2,
-                    input**2,
-                    sum="add",
-                    mul=mul,
-                )
-                max = generalized_rspmm(
-                    edge_index,
-                    edge_type,
-                    edge_weight,
-                    relation,
-                    input,
-                    sum="max",
-                    mul=mul,
-                )
-                min = generalized_rspmm(
-                    edge_index,
-                    edge_type,
-                    edge_weight,
-                    relation,
-                    input,
-                    sum="min",
-                    mul=mul,
-                )
-                mean = (sum + boundary) / degree_out
-                sq_mean = (sq_sum + boundary**2) / degree_out
-                max = torch.max(max, boundary)
-                min = torch.min(min, boundary)  # (node, batch_size * input_dim)
-                std = (sq_mean - mean**2).clamp(min=self.eps).sqrt()
-                features = torch.cat(
-                    [
-                        mean.unsqueeze(-1),
-                        max.unsqueeze(-1),
-                        min.unsqueeze(-1),
-                        std.unsqueeze(-1),
-                    ],
-                    dim=-1,
-                )
-                features = features.flatten(-2)  # (node, batch_size * input_dim * 4)
-                scale = degree_out.log()
-                scale = scale / scale.mean()
-                scales = torch.cat(
-                    [torch.ones_like(scale), scale, 1 / scale.clamp(min=1e-2)], dim=-1
-                )  # (node, 3)
-                update = (features.unsqueeze(-1) * scales.unsqueeze(-2)).flatten(
-                    -2
-                )  # (node, batch_size * input_dim * 4 * 3)
             else:
                 raise ValueError(
                     "Unknown aggregation function `%s`" % self.aggregate_func
