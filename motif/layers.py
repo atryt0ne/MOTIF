@@ -295,55 +295,64 @@ class GeneralizedRelationalConv(MessagePassing):
                 )
         else:
             # Pure PyTorch fallback (no custom CUDA kernels)
-            # This is slower but works on any platform without compilation
+            # Reshape back to 3D: (batch_size, num_nodes, dim)
+            batch_size_times_dim = input.shape[1]
+            input_3d = input.view(num_node, batch_size, -1).transpose(
+                0, 1
+            )  # (batch_size, num_nodes, dim)
+            relation_3d = relation.view(-1, batch_size, input_3d.shape[-1]).transpose(
+                0, 1
+            )  # (batch_size, num_relations, dim)
+            boundary_3d = boundary.view(num_node, batch_size, -1).transpose(
+                0, 1
+            )  # (batch_size, num_nodes, dim)
+
+            # Compute messages with chunking to save memory
             node_in, node_out = edge_index
-            batch_size, num_node = input.shape[:2]
+            num_edges = edge_index.shape[1]
+            chunk_size = 8192  # Process edges in chunks
 
-            # Compute messages
-            if self.message_func == "distmult":
-                # relation: (batch_size, num_relations, dim)
-                # input: (batch_size, num_nodes, dim)
-                # message: (batch_size, num_edges, dim)
-                edge_relation = relation[:, edge_type]  # (batch_size, num_edges, dim)
-                edge_input = input[:, node_in]  # (batch_size, num_edges, dim)
-                message = edge_relation * edge_input
-            elif self.message_func == "transe":
-                edge_relation = relation[:, edge_type]
-                edge_input = input[:, node_in]
-                message = edge_relation + edge_input
-            elif self.message_func == "rotate":
-                edge_relation = relation[:, edge_type]
-                edge_input = input[:, node_in]
-                message = edge_relation * edge_input
-            else:
-                raise ValueError("Unknown message function `%s`" % self.message_func)
+            updates = []
+            for start in range(0, num_edges, chunk_size):
+                end = min(start + chunk_size, num_edges)
+                chunk_node_in = node_in[start:end]
+                chunk_node_out = node_out[start:end]
+                chunk_edge_type = edge_type[start:end]
 
-            # Apply edge weights
-            if edge_weight is not None:
-                message = message * edge_weight.unsqueeze(-1)
+                # Get features for this chunk
+                if self.message_func == "distmult":
+                    chunk_relation = relation_3d[
+                        :, chunk_edge_type
+                    ]  # (batch_size, chunk_size, dim)
+                    chunk_input = input_3d[
+                        :, chunk_node_in
+                    ]  # (batch_size, chunk_size, dim)
+                    chunk_message = chunk_relation * chunk_input
+                elif self.message_func == "transe":
+                    chunk_relation = relation_3d[:, chunk_edge_type]
+                    chunk_input = input_3d[:, chunk_node_in]
+                    chunk_message = chunk_relation + chunk_input
+                else:
+                    raise ValueError(
+                        "Unknown message function `%s`" % self.message_func
+                    )
 
-            # Aggregate messages
-            # message: (batch_size, num_edges, dim)
-            # node_out: (num_edges,)
-            if self.aggregate_func == "sum":
-                update = scatter(
-                    message, node_out, dim=1, dim_size=num_node, reduce="sum"
+                # Aggregate this chunk
+                chunk_update = scatter(
+                    chunk_message,
+                    chunk_node_out,
+                    dim=1,
+                    dim_size=num_node,
+                    reduce="sum",
                 )
-                update = update + boundary
-            elif self.aggregate_func == "mean":
-                update = scatter(
-                    message, node_out, dim=1, dim_size=num_node, reduce="sum"
-                )
-                update = (update + boundary) / degree_out
-            elif self.aggregate_func == "max":
-                update = scatter(
-                    message, node_out, dim=1, dim_size=num_node, reduce="max"
-                )
-                update = update + boundary
-            else:
-                raise ValueError(
-                    "Unknown aggregation function `%s`" % self.aggregate_func
-                )
+                updates.append(chunk_update)
+
+            # Sum all chunk updates
+            update = torch.stack(updates).sum(dim=0)  # (batch_size, num_nodes, dim)
+            update = update + boundary_3d
+
+            # Flatten back
+            update = update.transpose(0, 1).flatten(1)  # (num_nodes, batch_size * dim)
 
         update = update.view(num_node, batch_size, -1).transpose(0, 1)
         return update
