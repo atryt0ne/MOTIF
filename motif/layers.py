@@ -294,45 +294,48 @@ class GeneralizedRelationalConv(MessagePassing):
                     % self.aggregate_func
                 )
         else:
-            # reduce memory complexity from O(|E|d) to O(|V|d), so we can apply it to larger graphs
-            from .rspmm import generalized_rspmm
-
-            if self.message_func in self.message2mul:
-                mul = self.message2mul[self.message_func]
+            # Pure PyTorch fallback (no custom CUDA kernels)
+            # This is slower but works on any platform without compilation
+            node_in, node_out = edge_index
+            batch_size, num_node = input.shape[:2]
+            
+            # Compute messages
+            if self.message_func == "distmult":
+                # relation: (batch_size, num_relations, dim)
+                # input: (batch_size, num_nodes, dim)
+                # message: (batch_size, num_edges, dim)
+                edge_relation = relation[:, edge_type]  # (batch_size, num_edges, dim)
+                edge_input = input[:, node_in]  # (batch_size, num_edges, dim)
+                message = edge_relation * edge_input
+            elif self.message_func == "transe":
+                edge_relation = relation[:, edge_type]
+                edge_input = input[:, node_in]
+                message = edge_relation + edge_input
+            elif self.message_func == "rotate":
+                edge_relation = relation[:, edge_type]
+                edge_input = input[:, node_in]
+                message = edge_relation * edge_input
             else:
                 raise ValueError("Unknown message function `%s`" % self.message_func)
+            
+            # Apply edge weights
+            if edge_weight is not None:
+                message = message * edge_weight.unsqueeze(-1)
+            
+            # Aggregate messages
+            # message: (batch_size, num_edges, dim)
+            # node_out: (num_edges,)
             if self.aggregate_func == "sum":
-                update = generalized_rspmm(
-                    edge_index,
-                    edge_type,
-                    edge_weight,
-                    relation,
-                    input,
-                    sum="add",
-                    mul=mul,
-                )
+                update = scatter(message, node_out, dim=1, dim_size=num_node, reduce="sum")
                 update = update + boundary
             elif self.aggregate_func == "mean":
-                update = generalized_rspmm(
-                    edge_index,
-                    edge_type,
-                    edge_weight,
-                    relation,
-                    input,
-                    sum="add",
-                    mul=mul,
-                )
+                update = scatter(message, node_out, dim=1, dim_size=num_node, reduce="sum")
                 update = (update + boundary) / degree_out
             elif self.aggregate_func == "max":
-                update = generalized_rspmm(
-                    edge_index,
-                    edge_type,
-                    edge_weight,
-                    relation,
-                    input,
-                    sum="max",
-                    mul=mul,
-                )
+                update = scatter(message, node_out, dim=1, dim_size=num_node, reduce="max")
+                update = update + boundary
+            else:
+                raise ValueError("Unknown aggregation function `%s`" % self.aggregate_func)
                 update = torch.max(update, boundary)
             elif self.aggregate_func == "pna":
                 # we use PNA with 4 aggregators (mean / max / min / std)
