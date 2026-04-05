@@ -1,5 +1,9 @@
 # Relation Subsampling for Hypergraph Construction
 
+**See PLAN.md for current project status and next steps.**
+
+---
+
 ## Goal
 Sample subset of relations to reduce memory/computation when building relation hypergraph.
 
